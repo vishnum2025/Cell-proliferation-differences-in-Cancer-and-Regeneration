@@ -1,0 +1,167 @@
+install.packages("DESeq2")
+
+
+library(DESeq2)
+
+
+countMatrix <- read.table("counts.txt", header = TRUE, row.names = 1, sep = "\t")
+
+
+metadata <- read.delim(file="metadata", row.names=1)
+
+countMatrix <- countMatrix[, -which(names(countMatrix) %in% c("Chr", "Start", "End", "Strand", "Length"))]
+
+all(colnames(countMatrix) %in% rownames(metadata))
+all(colnames(countMatrix) == rownames(metadata))
+
+dds <- DESeqDataSetFromMatrix(countData = countMatrix, colData = metadata, design = ~ Condition)
+
+View(counts(dds))
+
+dds <- estimateSizeFactors(dds)
+
+sizeFactors(dds)
+
+
+#normalized_counts <- counts(dds, normalized=TRUE)
+
+#write.table(normalized_counts, file="/storage/jaspreet/samanyu21487/trimg/normalized_counts.txt", sep="\t", quote=F, col.names=NA)
+
+dds <- DESeq(dds)
+
+results <- results(dds)
+
+result <- results(dds, contrast = c("Condition", "Control", "1dpl"))
+res_df <- as.data.frame(result)
+res_df <- na.omit(res_df)
+write.csv(res_df, file = "control_vs_1dpl.csv")
+
+result <- results(dds, contrast = c("Condition", "Control", "4dpl"))
+res_df <- as.data.frame(result)
+res_df <- na.omit(res_df)
+write.csv(res_df, file = "control_vs_4dpl.csv")
+
+result <- results(dds, contrast = c("Condition", "Control", "7dpl"))
+res_df <- as.data.frame(result)
+res_df <- na.omit(res_df)
+write.csv(res_df, file = "control_vs_7dpl.csv")
+
+result <- results(dds, contrast = c("Condition", "1dpl", "4dpl"))
+res_df <- as.data.frame(result)
+res_df <- na.omit(res_df)
+write.csv(res_df, file = "1dpl_vs_4dpl.csv")
+
+result <- results(dds, contrast = c("Condition", "4dpl", "7dpl"))
+res_df <- as.data.frame(result)
+res_df <- na.omit(res_df)
+write.csv(res_df, file = "4dpl_vs_7dpl.csv")
+
+
+plotMA(results)
+
+
+
+NEW
+
+results <- results(dds)
+res_df <- as.data.frame(results)
+res_df <- na.omit(res_df)
+
+
+install.packages("biomaRt")
+library(biomaRt)
+
+ensembl <- useMart("ensembl", dataset = "drerio_gene_ensembl")
+gene_names <- rownames(res_df)
+ensembl_ids <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
+                     filters = "external_gene_name",
+                     values = gene_names,
+                     mart = ensembl)
+
+matching_rows <- which(ensembl_ids$external_gene_name %in% rownames(res_df))
+res_df[matching_rows, "ensembl_id"] <- ensembl_ids$ensembl_gene_id[matching_rows]
+
+ranks <- sign(res_df$log2FoldChange) - log(res_df$pvalue)
+
+res_df$rank <- ranks
+
+write.csv(res_df, file = "results.csv")
+
+
+#in R (windows)
+
+BiocManager::install("org.Dr.eg.db")
+library(GSEABase)
+library(fgsea)
+
+original_gene_list1 <- res_df$rank
+
+names(original_gene_list1) <- res_df$ensembl_id
+
+original_gene_list1<-na.omit(original_gene_list1)
+
+original_gene_list1 = sort(original_gene_list1, decreasing = TRUE)
+
+library(org.Dr.eg.db)
+
+organism <- "org.Dr.eg.db"
+
+BiocManager::install(organism, character.only = TRUE)
+library(organism, character.only = TRUE)
+
+install.packages("clusterProfiler")
+library(clusterProfiler)
+
+BiocManager::install("clusterProfiler", version = "3.14")
+BiocManager::install("pathview")
+BiocManager::install("enrichplot")
+library(clusterProfiler)
+library(enrichplot)
+# we use ggplot2 to add x axis labels (ex: ridgeplot)
+library(ggplot2)
+
+gse <- gseGO(geneList=original_gene_list1, 
+             ont ="ALL", 
+             keyType = "ENSEMBL", 
+             nPerm = 10000, 
+             minGSSize = 3, 
+             maxGSSize = 800, 
+             pvalueCutoff = 0.05, 
+             verbose = TRUE, 
+             OrgDb = organism, 
+             pAdjustMethod = "none")
+
+pathway_names <- gse$Description
+enrichment_scores <- gse$enrichmentScore
+
+sorted_scores <- sort(enrichment_scores, decreasing = TRUE)
+
+ids<-bitr(names(original_gene_list1), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb=organism)
+dedup_ids = ids[!duplicated(ids[c("ENSEMBL")]),]
+df2 = res_df[res_df$ensembl_id %in% dedup_ids$ENSEMBL,]
+df2$Y = dedup_ids$ENTREZID
+
+kegg_gene_list <- df2$rank
+names(kegg_gene_list) <- df2$Y
+
+kegg_gene_list<-na.omit(kegg_gene_list)
+
+kegg_gene_list = sort(kegg_gene_list, decreasing = TRUE)
+
+kegg_organism = "dre"
+kk2 <- gseKEGG(geneList     = kegg_gene_list,
+               organism     = kegg_organism,
+               nPerm        = 10000,
+               minGSSize    = 3,
+               maxGSSize    = 800,
+               pvalueCutoff = 0.05,
+               pAdjustMethod = "none",
+               keyType       = "ncbi-geneid")
+
+kegg_dfzb <- as.data.frame(kk2)
+
+colnames(kegg_dfzb)
+write.csv(kegg_dfzb, "kegg_resultszb.csv", row.names = FALSE)
+write.csv(df2, "kegg_geneszb.csv", row.names = TRUE)
+
+

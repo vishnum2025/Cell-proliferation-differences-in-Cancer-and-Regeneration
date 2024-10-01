@@ -1,0 +1,162 @@
+counts <- read.delim("count_zebrafish.csv", header = TRUE, row.names = 1, sep = ",")
+counts
+
+# Read the CSV file without row names
+counts <- read.csv("count_zebrafish.csv", header = TRUE, row.names = NULL, sep = ",")
+
+# Identify duplicate values in the column
+duplicate_rows <- duplicated(counts[, 1]) | duplicated(counts[, 1], fromLast = TRUE)
+
+# Print the duplicate values
+print(counts[duplicate_rows, 1])
+
+# Remove the duplicate rows from the data frame
+counts <- counts[!duplicate_rows, ]
+
+# Assign the unique values as row names
+rownames(counts) <- counts[, 1]
+
+newdata <- read.csv('sampleinfo_zebrafish.csv')
+
+newdata[, 1]
+rownames(newdata) <- newdata[, 1]
+newdata <- newdata[, -1]
+
+all(colnames(counts) %in% rownames(newdata))
+all(colnames(counts) == rownames(newdata))
+
+design <- ~ factor(Factors)
+str(newdata)
+newdata$Factors <- factor(newdata$Factors)
+dds_zb <- DESeqDataSetFromMatrix(countData = counts,
+                                 colData = newdata,
+                                 design = design)
+
+dds_zb$Factors <- relevel(dds_zb$Factors, ref = "Control")
+dds_zb <- DESeq(dds_zb)
+res <- results(dds_zb)
+
+#plotMA(res)
+de_counts <- counts(dds_zb)[rownames(res), ]
+log2_counts <- log2(de_counts + 1)
+scaled_counts <- t(scale(t(log2_counts)))
+
+#heatmap(scaled_counts, Colv = NA, Rowv = NA, scale = "row",
+        col = colorRampPalette(c("white", "lightblue", "darkblue"))(100),
+        main = "Heatmap of Differentially Expressed Genes")
+
+res_df <- as.data.frame(res)
+res_df <- na.omit(res_df)
+
+ensembl <- useMart("ensembl", dataset = "drerio_gene_ensembl")  
+
+# Get the Ensembl IDs for the gene names in resdf
+gene_names <- rownames(res_df)
+ensembl_ids <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"),
+                     filters = "external_gene_name",
+                     values = gene_names,
+                     mart = ensembl)
+
+# Match the gene names and assign the corresponding Ensembl IDs
+res_df[rownames(res_df) %in% ensembl_ids$external_gene_name, "ensembl_id"] <- ensembl_ids$ensembl_gene_id
+
+# Match the gene names and assign the corresponding Ensembl IDs
+match_genes <- which(ensembl_ids$external_gene_name %in% rownames(res_df))
+ensembl_ids_match <- ensembl_ids$ensembl_gene_id[match_genes]
+res_df[match_genes, "ensembl_id"] <- ensembl_ids_match
+
+# Calculate ranks based on the formula
+ranks <- sign(res_df$log2FoldChange) - log(res_df$pvalue)
+
+# Add ranks as a new column in res_df
+res_df$rank <- ranks
+
+BiocManager::install("org.Dr.eg.db")
+library(GSEABase)
+library(fgsea)
+
+# Load required library
+library(fgsea)
+
+# we want the log2 fold change 
+original_gene_list1 <- res_df$rank
+
+# name the vector
+names(original_gene_list1) <- res_df$ensembl_id
+
+# omit any NA values 
+original_gene_list1<-na.omit(original_gene_list1)
+
+# sort the list in decreasing order (required for clusterProfiler)
+original_gene_list1 = sort(original_gene_list1, decreasing = TRUE)
+
+library(org.Dr.eg.db)
+
+# Set the organism to zebrafish
+organism <- "org.Dr.eg.db"
+
+gse <- gseGO(geneList=original_gene_list1, 
+             ont ="ALL", 
+             keyType = "ENSEMBL", 
+             nPerm = 10000, 
+             minGSSize = 3, 
+             maxGSSize = 800, 
+             pvalueCutoff = 0.05, 
+             verbose = TRUE, 
+             OrgDb = organism, 
+             pAdjustMethod = "none")
+
+require(DOSE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+# Extract the pathway names and enrichment scores from the gse object
+pathway_names <- gse$Description
+enrichment_scores <- gse$enrichmentScore
+
+# Sort the enrichment scores in descending order
+sorted_scores <- sort(enrichment_scores, decreasing = TRUE)
+
+# Create a barplot
+barplot(sorted_scores, names.arg = pathway_names[order(enrichment_scores, decreasing = TRUE)],
+        xlab = "Enrichment Score", ylab = "Pathway", main = "Pathway Enrichment Scores")
+
+ids<-bitr(names(original_gene_list1), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb=organism)
+# remove duplicate IDS (here I use "ENSEMBL", but it should be whatever was selected as keyType)
+dedup_ids = ids[!duplicated(ids[c("ENSEMBL")]),]
+df2 = res_df[res_df$ensembl_id %in% dedup_ids$ENSEMBL,]
+df2$Y = dedup_ids$ENTREZID
+
+kegg_gene_list <- df2$rank
+names(kegg_gene_list) <- df2$Y
+
+kegg_gene_list<-na.omit(kegg_gene_list)
+
+# sort the list in decreasing order (required for clusterProfiler)
+kegg_gene_list = sort(kegg_gene_list, decreasing = TRUE)
+
+kegg_organism = "dre"
+kk2 <- gseKEGG(geneList     = kegg_gene_list,
+               organism     = kegg_organism,
+               nPerm        = 10000,
+               minGSSize    = 3,
+               maxGSSize    = 800,
+               pvalueCutoff = 0.05,
+               pAdjustMethod = "none",
+               keyType       = "ncbi-geneid")
+
+# Assuming 'kegg_results' is your KEGG pathway analysis results
+========
+# Convert results to dataframe
+kegg_dfzb <- as.data.frame(kk2)
+
+colnames(kegg_dfzb)
+# Save dataframe as CSV
+write.csv(kegg_dfzb, "kegg_resultszb.csv", row.names = FALSE)
+write.csv(df2, "kegg_geneszb.csv", row.names = TRUE)
+
+
+
+
+
+
+
